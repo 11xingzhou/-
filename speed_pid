@@ -1,0 +1,111 @@
+class SPEED_PID:
+    def __init__(self,mode, Kp, Ki, Kd,max_integral=1020, max_output=1023,min_output=-1023,DeadZone=600):
+        self.mode = mode
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
+        self.max_integral = max_integral      #位置式 积分限幅   
+        self.max_output=max_output
+        self.min_output=min_output        
+        self.DeadZone=DeadZone                # 电机死区   
+              
+        #self.last_error = 0
+        self.integral = 0          
+        # 历史误差与输出
+        self.last_error = 0
+        self.prev_error = 0
+        self.Last_output = 0  
+        self.output = 0  #
+        
+        # --- 滑动滤波器配置 ---
+        self.filter_size = 5  # 滤波窗口大小，越大越平滑但延迟越高
+        self.speed_buffer = []
+        
+    def compute(self, setpoint,measured_value):
+        
+        if self.mode==0: # 位置式PID
+            error = setpoint - measured_value
+            
+            # 积分项及限幅 (Anti-windup)
+            self.integral += error
+            if self.integral > self.max_integral: self.integral = self.max_integral
+            elif self.integral < -self.max_integral: self.integral = -self.max_integral
+            
+            # 微分项
+            derivative = error - self.last_error  
+            # 总输出及限幅
+            self.output = self.Kp * error + self.Ki * self.integral + self.Kd * derivative
+            
+           # 如果输出不为0，则叠加死区值，帮助电机克服静摩擦
+            
+            if  self.output > 0:
+                self.output += self.DeadZone
+            elif self.output < 0:
+                self.output -= self.DeadZone       
+
+                                 
+            if   self.output > self.max_output:    self.output = self.max_output
+            elif self.output < self.min_output:    self.output = self.min_output            
+
+            # 更新历史误差
+            self.last_error = error
+            self.Last_output=self.output
+            
+            return int(self.output)
+        if self.mode==1: # 增量式PID
+
+            error = setpoint - measured_value
+            
+            # 增量式PID计算
+            delta_p = self.Kp * (error - self.last_error)
+            delta_i = self.Ki * error
+            delta_d = self.Kd * (error - 2 * self.last_error + self.prev_error)
+            
+            increment = delta_p + delta_i + delta_d
+            
+            # 累加得到当前输出，并进行限幅处理
+            self.output =self.Last_output+increment
+            
+          
+              
+            if   self.output > self.max_output:    self.output = self.max_output
+            elif self.output < self.min_output:    self.output = self.min_output
+            # 如果输出在正向死区内，强制拉高到死区阈值
+            elif 0 < self.output < self.DeadZone:  self.output = self.DeadZone
+            # 如果输出在负向死区内，强制拉低到负向死区阈值（用于反转）
+            elif -self.DeadZone < self.output < 0: self.output = -self.DeadZone   
+              
+             
+            # 更新历史误差
+            self.prev_error = self.last_error
+            self.last_error = error
+            self.Last_output=self.output
+            
+            return int(self.output)
+        
+    def moving_average_filter(self, new_value):
+        """
+        滑动平均滤波算法
+        用于平滑输入的转速数据，去除毛刺
+        """
+        self.speed_buffer.append(new_value)
+        if len(self.speed_buffer) > self.filter_size:
+            self.speed_buffer.pop(0)
+            
+        if not self.speed_buffer:
+            return 0.0
+            
+        return sum(self.speed_buffer) / len(self.speed_buffer)    
+        
+        
+    def reset(self):
+        """重置PID状态，防止切换模式时发生突变"""
+        if self.mode==0: # 位置式PID
+            self.integral = 0
+            self.last_error = 0
+        
+        if self.mode==1: # 增量式PID
+            self.last_error = 0
+            self.prev_error = 0
+            self.output = 0
+            self.Last_output = 0
